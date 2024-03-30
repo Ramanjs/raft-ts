@@ -11,6 +11,7 @@ const NODES = String(process.env.NODES).split(',')
 const SELFIDX = NODES.indexOf(SELFID)
 const ELECTION_TIMEOUT = Number(process.argv[3])
 const HEARTBEAT_FREQUENCY = Number(process.env.HEARTBEAT_FREQUENCY)
+const LOGPATH = 'logs_node_' + String(SELFIDX) 
 const CACHE = new Map()
 
 const GlobalState: NodeState = {
@@ -28,18 +29,50 @@ const GlobalState: NodeState = {
 
 // TODO: on recovery from crash
 // update GlobalState values from log files
+if (fs.existsSync(LOGPATH) && fs.existsSync(LOGPATH + '/logs.txt')) {
+  const content = fs.readFileSync(LOGPATH + '/logs.txt').toString()
+  let logs = content.split('\n')
+  logs = logs.slice(0, logs.length - 1)
+  const restoredLogs = logs.map(log => {
+    const values = log.split(' ')
+    if (values[0] === 'NO-OP') {
+      return {
+        command: values[0],
+        term: Number(values[1])
+      }
+    } else {
+      return {
+        command: values.slice(0, 3).join(' '),
+        term: Number(values[3])
+      }
+    }
+  })
+
+  console.log('Restored logs: ', restoredLogs)
+
+  GlobalState.log = restoredLogs
+}
+
+if (fs.existsSync(LOGPATH) && fs.existsSync(LOGPATH + '/metadata.txt')) {
+  const content = fs.readFileSync(LOGPATH + '/metadata.txt').toString()
+  const values = content.split('\n')
+  GlobalState.commitLength = Number(values[0].split(' ')[2])
+  GlobalState.currentTerm = Number(values[1].split(' ')[1])
+  GlobalState.votedFor = values[2].split(' ')[2]
+
+  console.log(`Restored metadata:\nCommit length: ${GlobalState.commitLength}\nTerm: ${GlobalState.currentTerm}\nVoted for: ${GlobalState.votedFor}`)
+}
 
 const dumpLogs = () => {
   try {
-    const path = 'logs_node_' + String(SELFIDX) 
-    if (!fs.existsSync(path)) {
-      fs.mkdirSync(path);
+    if (!fs.existsSync(LOGPATH)) {
+      fs.mkdirSync(LOGPATH);
     }
 
     const logs = GlobalState.log.reduce((prev, cur) => {
       return prev + cur.command + ' ' + String(cur.term) + '\n' 
     }, '')
-    fs.writeFileSync(path + '/logs.txt', logs)
+    fs.writeFileSync(LOGPATH + '/logs.txt', logs)
   } catch (err) {
     console.log(err)
   }
@@ -47,13 +80,12 @@ const dumpLogs = () => {
 
 const dumpMetadata = () => {
   try {
-    const path = 'logs_node_' + String(SELFIDX) 
-    if (!fs.existsSync(path)) {
-      fs.mkdirSync(path);
+    if (!fs.existsSync(LOGPATH)) {
+      fs.mkdirSync(LOGPATH);
     }
 
     const metadata = `Commit length: ${GlobalState.commitLength}\nTerm: ${GlobalState.currentTerm}\nVoted for: ${GlobalState.votedFor}\n` 
-    fs.writeFileSync(path + '/metadata.txt', metadata)
+    fs.writeFileSync(LOGPATH + '/metadata.txt', metadata)
   } catch (err) {
     console.log(err)
   }
