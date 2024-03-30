@@ -44,6 +44,16 @@ export interface AppendEntriesResponse {
   ack: number;
 }
 
+export interface ServeClientRequest {
+  request: string;
+}
+
+export interface ServeClientResponse {
+  data: string;
+  leaderId: string;
+  success: boolean;
+}
+
 function createBaseRequestVoteRequest(): RequestVoteRequest {
   return { candidateId: "", term: 0, lastLogIndex: 0, lastLogTerm: 0 };
 }
@@ -519,6 +529,152 @@ export const AppendEntriesResponse = {
   },
 };
 
+function createBaseServeClientRequest(): ServeClientRequest {
+  return { request: "" };
+}
+
+export const ServeClientRequest = {
+  encode(message: ServeClientRequest, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.request !== "") {
+      writer.uint32(10).string(message.request);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): ServeClientRequest {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseServeClientRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 10) {
+            break;
+          }
+
+          message.request = reader.string();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ServeClientRequest {
+    return { request: isSet(object.request) ? globalThis.String(object.request) : "" };
+  },
+
+  toJSON(message: ServeClientRequest): unknown {
+    const obj: any = {};
+    if (message.request !== "") {
+      obj.request = message.request;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ServeClientRequest>, I>>(base?: I): ServeClientRequest {
+    return ServeClientRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ServeClientRequest>, I>>(object: I): ServeClientRequest {
+    const message = createBaseServeClientRequest();
+    message.request = object.request ?? "";
+    return message;
+  },
+};
+
+function createBaseServeClientResponse(): ServeClientResponse {
+  return { data: "", leaderId: "", success: false };
+}
+
+export const ServeClientResponse = {
+  encode(message: ServeClientResponse, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.data !== "") {
+      writer.uint32(10).string(message.data);
+    }
+    if (message.leaderId !== "") {
+      writer.uint32(18).string(message.leaderId);
+    }
+    if (message.success !== false) {
+      writer.uint32(24).bool(message.success);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): ServeClientResponse {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseServeClientResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 10) {
+            break;
+          }
+
+          message.data = reader.string();
+          continue;
+        case 2:
+          if (tag !== 18) {
+            break;
+          }
+
+          message.leaderId = reader.string();
+          continue;
+        case 3:
+          if (tag !== 24) {
+            break;
+          }
+
+          message.success = reader.bool();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ServeClientResponse {
+    return {
+      data: isSet(object.data) ? globalThis.String(object.data) : "",
+      leaderId: isSet(object.leaderId) ? globalThis.String(object.leaderId) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
+    };
+  },
+
+  toJSON(message: ServeClientResponse): unknown {
+    const obj: any = {};
+    if (message.data !== "") {
+      obj.data = message.data;
+    }
+    if (message.leaderId !== "") {
+      obj.leaderId = message.leaderId;
+    }
+    if (message.success !== false) {
+      obj.success = message.success;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ServeClientResponse>, I>>(base?: I): ServeClientResponse {
+    return ServeClientResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ServeClientResponse>, I>>(object: I): ServeClientResponse {
+    const message = createBaseServeClientResponse();
+    message.data = object.data ?? "";
+    message.leaderId = object.leaderId ?? "";
+    message.success = object.success ?? false;
+    return message;
+  },
+};
+
 export type RaftService = typeof RaftService;
 export const RaftService = {
   requestVote: {
@@ -539,11 +695,21 @@ export const RaftService = {
     responseSerialize: (value: AppendEntriesResponse) => Buffer.from(AppendEntriesResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer) => AppendEntriesResponse.decode(value),
   },
+  serveClient: {
+    path: "/Raft/ServeClient",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: ServeClientRequest) => Buffer.from(ServeClientRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer) => ServeClientRequest.decode(value),
+    responseSerialize: (value: ServeClientResponse) => Buffer.from(ServeClientResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer) => ServeClientResponse.decode(value),
+  },
 } as const;
 
 export interface RaftServer extends UntypedServiceImplementation {
   requestVote: handleUnaryCall<RequestVoteRequest, RequestVoteResponse>;
   appendEntries: handleUnaryCall<AppendEntriesRequest, AppendEntriesResponse>;
+  serveClient: handleUnaryCall<ServeClientRequest, ServeClientResponse>;
 }
 
 export interface RaftClient extends Client {
@@ -576,6 +742,21 @@ export interface RaftClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: AppendEntriesResponse) => void,
+  ): ClientUnaryCall;
+  serveClient(
+    request: ServeClientRequest,
+    callback: (error: ServiceError | null, response: ServeClientResponse) => void,
+  ): ClientUnaryCall;
+  serveClient(
+    request: ServeClientRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ServeClientResponse) => void,
+  ): ClientUnaryCall;
+  serveClient(
+    request: ServeClientRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ServeClientResponse) => void,
   ): ClientUnaryCall;
 }
 

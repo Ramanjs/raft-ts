@@ -1,15 +1,16 @@
 import { Term, Role, Vote, NodeState, NodeId, LogEntry } from './type'
 import dotenv from 'dotenv'
-import { RequestVoteRequest, RaftClient, RequestVoteResponse, AppendEntriesRequest, AppendEntriesResponse } from './raft'
-import { ServerUnaryCall, credentials, sendUnaryData } from "@grpc/grpc-js"
+import { RequestVoteRequest, RaftClient, RequestVoteResponse, AppendEntriesRequest, AppendEntriesResponse, RaftService, ServeClientRequest, ServeClientResponse } from './raft'
+import { Server, ServerCredentials, ServerUnaryCall, credentials, sendUnaryData } from "@grpc/grpc-js"
 
 dotenv.config()
 
-const SELFID = String(process.env.NODEID)
+const SELFID = String(process.argv[2])
 const NODES = String(process.env.NODES).split(',')
 const SELFIDX = NODES.indexOf(SELFID)
-const ELECTION_TIMEOUT = Number(process.env.ELECTION_TIMEOUT)
+const ELECTION_TIMEOUT = Number(process.argv[3])
 const HEARTBEAT_FREQUENCY = Number(process.env.HEARTBEAT_FREQUENCY)
+const CACHE = new Map()
 
 const GlobalState: NodeState = {
   currentTerm: 0,
@@ -44,6 +45,12 @@ const commitLogEntries = () => {
     }
     if (acks >= Math.ceil((NODES.length + 1) / 2)) {
       // TODO: deliver log[commitLength].command to the application
+      const command = GlobalState.log[GlobalState.commitLength].command.split(' ')
+      const op = command[0]
+      console.log(`Committing at ${SELFID}: ${op}`)
+      if (op === 'SET') {
+        CACHE.set(command[1], command[2])
+      }
       GlobalState.commitLength += 1
     } else {
       break;
@@ -68,6 +75,12 @@ const appendEntries = (prefixLen: number, leaderCommit: number, suffix: LogEntry
   if (leaderCommit > GlobalState.commitLength) {
     for (let i = GlobalState.commitLength; i < leaderCommit; i++) {
       // TODO: deliver log[i].command to application
+      const command = GlobalState.log[i].command.split(' ')
+      const op = command[0]
+      console.log(`Committing at ${SELFID}: ${op}`)
+      if (op === 'SET') {
+        CACHE.set(command[1], command[2])
+      }
     }
     GlobalState.commitLength = leaderCommit
   }
@@ -126,12 +139,14 @@ const replicateLog = (leaderId: NodeId, followerId: NodeId) => {
 }
 
 const receiveVote = (voterId: NodeId, term: number, granted: boolean) => {
+  console.log(`Recieved vote from Node: ${voterId} with term: ${term} and granted: ${granted}`)
   if (GlobalState.currentRole == Role.CANDIDATE && term == GlobalState.currentTerm && granted) {
     GlobalState.votesReceived.add(voterId)
     if (GlobalState.votesReceived.size >= Math.ceil((NODES.length + 1) / 2)) {
       GlobalState.currentRole = Role.LEADER
       GlobalState.currentLeader = SELFID
       cancelElectionTimer()
+      console.log(`Became leader: ${SELFID}`)
       for (const [i, follower] of NODES.entries()) {
         if (follower != SELFID) {
           GlobalState.sentLength[i] = GlobalState.log.length
@@ -149,7 +164,7 @@ const receiveVote = (voterId: NodeId, term: number, granted: boolean) => {
 }
 
 const startElection = () => {
-  console.log('Election timed out: becomming candidate')
+  console.log('Election timed out: becoming candidate')
   GlobalState.currentTerm += 1
   GlobalState.currentRole = Role.CANDIDATE
   GlobalState.votedFor = SELFID
@@ -195,23 +210,6 @@ setInterval(() => {
   }
 }, 50)
 
-const broadcast = (msg: string) => {
-  if (GlobalState.currentRole == Role.LEADER) {
-    GlobalState.log.push({
-      term: GlobalState.currentTerm,
-      command: msg
-    })
-    GlobalState.ackedLength[SELFIDX] = GlobalState.log.length
-    for (const follower of NODES) {
-      if (follower != SELFID) {
-        replicateLog(SELFID, follower)
-      }
-    }
-  } else {
-    // TODO: forward to currentLeader via grpc
-  }
-}
-
 setInterval(() => {
   if (GlobalState.currentRole === Role.LEADER) {
     for (const follower of NODES) {
@@ -229,6 +227,7 @@ const requestVote = (
   callback: sendUnaryData<RequestVoteResponse>
 ) => {
   const candidate = call.request
+  console.log(`Received vote request from Node:${candidate.candidateId} with term: ${candidate.term}`)
   if (candidate.term > GlobalState.currentTerm) {
     GlobalState.currentTerm = candidate.term
     GlobalState.currentRole = Role.FOLLOWER
@@ -265,6 +264,7 @@ const logRequest = (
   callback: sendUnaryData<AppendEntriesResponse>
 ) => {
   const leader = call.request
+  console.log(`Received AppendEntriesRPC from ${leader.leaderId} with term: ${leader.term}. Previous log index: ${leader.prevLogIndex} and entries[] size: ${leader.entries.length}`)
   if (leader.term > GlobalState.currentTerm) {
     GlobalState.currentTerm = leader.term
     GlobalState.votedFor = null
@@ -296,4 +296,64 @@ const logRequest = (
     callback(null, res)
   }
 }
+
+const serveClient = (
+  call: ServerUnaryCall<ServeClientRequest, ServeClientResponse>,
+  callback: sendUnaryData<ServeClientResponse>
+) => {
+  if (GlobalState.currentRole == Role.LEADER) {
+    GlobalState.log.push({
+      term: GlobalState.currentTerm,
+      command: call.request.request
+    })
+    GlobalState.ackedLength[SELFIDX] = GlobalState.log.length
+    for (const follower of NODES) {
+      if (follower != SELFID) {
+        replicateLog(SELFID, follower)
+      }
+    }
+    const request = call.request.request.split(' ')
+    const res: ServeClientResponse = {
+      data: '',
+      leaderId: String(GlobalState.currentLeader),
+      success: true
+    }
+    callback(null, res)
+  } else {
+    const client = new RaftClient(
+      String(GlobalState.currentLeader),
+      credentials.createInsecure()
+    )
+
+    const req: ServeClientRequest = {
+      request: call.request.request
+    }
+
+    client.serveClient(req, (err, res) => {
+      if (err) {
+        console.log(err)
+      } else {
+        callback(null, res)
+      }
+    })
+  }
+}
+
+const server = new Server()
+server.addService(RaftService, {
+  requestVote,
+  appendEntries: logRequest,
+  serveClient
+})
+server.bindAsync(
+  SELFID,
+  ServerCredentials.createInsecure(),
+  (error, port) => {
+    if (error) {
+      throw error;
+    }
+    console.log("server is running on", port);
+    server.start();
+  }
+);
 /* ----- SERVER ----- */
