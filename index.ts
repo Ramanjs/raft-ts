@@ -268,12 +268,12 @@ const logRequest = (
   if (leader.term > GlobalState.currentTerm) {
     GlobalState.currentTerm = leader.term
     GlobalState.votedFor = null
-    cancelElectionTimer()
   }
 
   if (leader.term == GlobalState.currentTerm) {
     GlobalState.currentRole = Role.FOLLOWER
     GlobalState.currentLeader = leader.leaderId
+    cancelElectionTimer()
   }
 
   const logOk = (GlobalState.log.length >= leader.prevLogIndex) && (leader.prevLogIndex == 0 || GlobalState.log[leader.prevLogIndex - 1].term == leader.prevLogTerm)
