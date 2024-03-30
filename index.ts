@@ -2,6 +2,7 @@ import { Term, Role, Vote, NodeState, NodeId, LogEntry } from './type'
 import dotenv from 'dotenv'
 import { RequestVoteRequest, RaftClient, RequestVoteResponse, AppendEntriesRequest, AppendEntriesResponse, RaftService, ServeClientRequest, ServeClientResponse } from './raft'
 import { Server, ServerCredentials, ServerUnaryCall, credentials, sendUnaryData } from "@grpc/grpc-js"
+import fs from 'fs'
 
 dotenv.config()
 
@@ -28,6 +29,36 @@ const GlobalState: NodeState = {
 // TODO: on recovery from crash
 // update GlobalState values from log files
 
+const dumpLogs = () => {
+  try {
+    const path = 'logs_node_' + String(SELFIDX) 
+    if (!fs.existsSync(path)) {
+      fs.mkdirSync(path);
+    }
+
+    const logs = GlobalState.log.reduce((prev, cur) => {
+      return prev + cur.command + ' ' + String(cur.term) + '\n' 
+    }, '')
+    fs.writeFileSync(path + '/logs.txt', logs)
+  } catch (err) {
+    console.log(err)
+  }
+}
+
+const dumpMetadata = () => {
+  try {
+    const path = 'logs_node_' + String(SELFIDX) 
+    if (!fs.existsSync(path)) {
+      fs.mkdirSync(path);
+    }
+
+    const metadata = `Commit length: ${GlobalState.commitLength}\nTerm: ${GlobalState.currentTerm}\nVoted for: ${GlobalState.votedFor}\n` 
+    fs.writeFileSync(path + '/metadata.txt', metadata)
+  } catch (err) {
+    console.log(err)
+  }
+}
+
 const cancelElectionTimer = () => {
   if (GlobalState.electionTimer != undefined) {
     clearTimeout(GlobalState.electionTimer)
@@ -52,6 +83,7 @@ const commitLogEntries = () => {
         CACHE.set(command[1], command[2])
       }
       GlobalState.commitLength += 1
+      dumpMetadata()
     } else {
       break;
     }
@@ -84,6 +116,8 @@ const appendEntries = (prefixLen: number, leaderCommit: number, suffix: LogEntry
     }
     GlobalState.commitLength = leaderCommit
   }
+  dumpLogs()
+  dumpMetadata()
 }
 
 const logResponse = (follower: NodeId, term: Term, ack: number, success: boolean) => {
@@ -102,6 +136,7 @@ const logResponse = (follower: NodeId, term: Term, ack: number, success: boolean
     GlobalState.currentRole = Role.FOLLOWER
     GlobalState.votedFor = null
     cancelElectionTimer()
+    dumpMetadata()
   }
 }
 
@@ -130,7 +165,7 @@ const replicateLog = (leaderId: NodeId, followerId: NodeId) => {
   }
   client.appendEntries(req, (err, res) => {
     if (err) {
-      console.log(err)
+      console.log('Failed to send AppendEntriesRPC to ' + followerId)
     } else {
       logResponse(followerId, res.term, res.ack, res.success)
     }
@@ -147,6 +182,11 @@ const receiveVote = (voterId: NodeId, term: number, granted: boolean) => {
       GlobalState.currentLeader = SELFID
       cancelElectionTimer()
       console.log(`Became leader: ${SELFID}`)
+      GlobalState.log.push({
+        term: GlobalState.currentTerm,
+        command: 'NO-OP'
+      })
+      dumpLogs()
       for (const [i, follower] of NODES.entries()) {
         if (follower != SELFID) {
           GlobalState.sentLength[i] = GlobalState.log.length
@@ -159,6 +199,7 @@ const receiveVote = (voterId: NodeId, term: number, granted: boolean) => {
       GlobalState.currentRole = Role.FOLLOWER
       GlobalState.votedFor = null
       cancelElectionTimer()
+      dumpMetadata()
     }
   }
 }
@@ -169,6 +210,7 @@ const startElection = () => {
   GlobalState.currentRole = Role.CANDIDATE
   GlobalState.votedFor = SELFID
   GlobalState.votesReceived.add(SELFID)
+  dumpMetadata()
 
   let lastTerm = 0
   if (GlobalState.log.length > 0) {
@@ -191,7 +233,7 @@ const startElection = () => {
 
       client.requestVote(req, (err, res) => {
         if (err) {
-          console.log(err)
+          console.log('Failed to send vote request to ' + node)
         } else {
           receiveVote(node, res.term, res.voteGranted)
         }
@@ -232,6 +274,7 @@ const requestVote = (
     GlobalState.currentTerm = candidate.term
     GlobalState.currentRole = Role.FOLLOWER
     GlobalState.votedFor = null
+    dumpMetadata()
   }
 
   let lastTerm = 0
@@ -268,6 +311,7 @@ const logRequest = (
   if (leader.term > GlobalState.currentTerm) {
     GlobalState.currentTerm = leader.term
     GlobalState.votedFor = null
+    dumpMetadata()
   }
 
   if (leader.term == GlobalState.currentTerm) {
@@ -306,6 +350,7 @@ const serveClient = (
       term: GlobalState.currentTerm,
       command: call.request.request
     })
+    dumpLogs()
     GlobalState.ackedLength[SELFIDX] = GlobalState.log.length
     for (const follower of NODES) {
       if (follower != SELFID) {
