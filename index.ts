@@ -27,6 +27,20 @@ const GlobalState: NodeState = {
   electionTimer: undefined
 }
 
+const callClientCallback = (commitIndex: number, callback: sendUnaryData<ServeClientResponse>) => {
+  let success = false
+  if (GlobalState.commitLength >= commitIndex) {
+    success = true
+  }
+
+  const res: ServeClientResponse = {
+    data: '',
+    leaderId: String(GlobalState.currentLeader),
+    success: success
+  }
+  callback(null, res)
+}
+
 // TODO: on recovery from crash
 // update GlobalState values from log files
 if (fs.existsSync(LOGPATH) && fs.existsSync(LOGPATH + '/logs.txt')) {
@@ -378,35 +392,40 @@ const serveClient = (
   callback: sendUnaryData<ServeClientResponse>
 ) => {
   if (GlobalState.currentRole == Role.LEADER) {
-    GlobalState.log.push({
-      term: GlobalState.currentTerm,
-      command: call.request.request
-    })
-    dumpLogs()
-    GlobalState.ackedLength[SELFIDX] = GlobalState.log.length
-    for (const follower of NODES) {
-      if (follower != SELFID) {
-        replicateLog(SELFID, follower)
+    const request = call.request.request
+    const op = request.split(' ')[0]
+    if (op === 'SET') {
+      GlobalState.log.push({
+        term: GlobalState.currentTerm,
+        command: call.request.request
+      })
+      dumpLogs()
+      GlobalState.ackedLength[SELFIDX] = GlobalState.log.length
+
+      setTimeout(() => {
+        callClientCallback(GlobalState.log.length, callback)
+      }, 2000)
+      for (const follower of NODES) {
+        if (follower != SELFID) {
+          replicateLog(SELFID, follower)
+        }
       }
+    } else if (op === 'GET') {
+      const key = request.split(' ')[1]
+      const res: ServeClientResponse = {
+        data: String(CACHE.get(key)),
+        leaderId: String(GlobalState.currentLeader),
+        success: true
+      }
+
+      callback(null, res)
     }
-    const request = call.request.request.split(' ')
-    const res: ServeClientResponse = {
-      data: '',
-      leaderId: String(GlobalState.currentLeader),
-      success: true
-    }
-    callback(null, res)
   } else {
     const client = new RaftClient(
       String(GlobalState.currentLeader),
       credentials.createInsecure()
     )
-
-    const req: ServeClientRequest = {
-      request: call.request.request
-    }
-
-    client.serveClient(req, (err, res) => {
+    client.serveClient(call.request, (err, res) => {
       if (err) {
         console.log(err)
       } else {
@@ -430,7 +449,6 @@ server.bindAsync(
       throw error;
     }
     console.log("server is running on", port);
-    server.start();
   }
 );
 /* ----- SERVER ----- */
