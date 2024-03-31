@@ -421,6 +421,16 @@ const serveClient = (
       callback(null, res)
     }
   } else {
+
+    if (GlobalState.currentLeader == null) {
+      const res: ServeClientResponse = {
+        data: '',
+        leaderId: String(GlobalState.currentLeader),
+        success: false
+      }
+      callback(null, res)
+      return
+    }
     const client = new RaftClient(
       String(GlobalState.currentLeader),
       credentials.createInsecure()
