@@ -23,9 +23,11 @@ type NodeState = {
   currentRole: Role,
   currentLeader: NodeId | null,
   votesReceived: Set<Vote>,
+  heartbeatResponses: Set<Vote>,
   sentLength: number[],
   ackedLength: number[],
-  electionTimer: NodeJS.Timeout | undefined
+  electionTimer: NodeJS.Timeout | undefined,
+  leaseTimeout: boolean 
 }
 
 export { Term, LogEntry, Role, NodeId, Vote, NodeState }

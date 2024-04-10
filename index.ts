@@ -11,6 +11,7 @@ const NODES = String(process.env.NODES).split(',')
 const SELFIDX = NODES.indexOf(SELFID)
 const ELECTION_TIMEOUT = Number(process.argv[3])
 const HEARTBEAT_FREQUENCY = Number(process.env.HEARTBEAT_FREQUENCY)
+const LEASE_TIMEOUT = Number(process.env.LEASE_TIMEOUT)
 const LOGPATH = 'logs_node_' + String(SELFIDX) 
 const CACHE = new Map()
 
@@ -22,9 +23,11 @@ const GlobalState: NodeState = {
   currentRole: Role.FOLLOWER,
   currentLeader: null,
   votesReceived: new Set<Vote>(),
+  heartbeatResponses: new Set<Vote>(),
   sentLength: new Array(NODES.length),
   ackedLength: new Array(NODES.length),
-  electionTimer: undefined
+  electionTimer: undefined,
+  leaseTimeout: false
 }
 
 const callClientCallback = (commitIndex: number, callback: sendUnaryData<ServeClientResponse>) => {
@@ -40,6 +43,11 @@ const callClientCallback = (commitIndex: number, callback: sendUnaryData<ServeCl
   }
   callback(null, res)
 }
+
+// Upon election start each node will send remaining lease timeout to candidate
+// Candidate will fail the election if lease is pending
+// Some other node will become candidate and win election after leases on all nodes expire
+// After becoming leader, candidate will 
 
 // TODO: on recovery from crash
 // update GlobalState values from log files
@@ -169,6 +177,7 @@ const appendEntries = (prefixLen: number, leaderCommit: number, suffix: LogEntry
 const logResponse = (follower: NodeId, term: Term, ack: number, success: boolean) => {
   if (term == GlobalState.currentTerm && GlobalState.currentRole == Role.LEADER) {
     const followerIdx = NODES.indexOf(follower)
+    GlobalState.heartbeatResponses.add(follower)
     if (success == true && ack >= GlobalState.ackedLength[followerIdx]) {
       GlobalState.sentLength[followerIdx] = ack;
       GlobalState.ackedLength[followerIdx] = ack;
@@ -233,6 +242,18 @@ const receiveVote = (voterId: NodeId, term: number, granted: boolean) => {
         command: 'NO-OP'
       })
       dumpLogs()
+      // start a timeout that checks for number of heartbeatResponses received in the lease interval and steps down if it is less than majority or restarts the timeout if ok
+      GlobalState.leaseTimeout = true
+      console.log('Acquiring Lease')
+      setTimeout(() => {
+        GlobalState.leaseTimeout = false
+        if (GlobalState.heartbeatResponses.size < Math.ceil((NODES.length + 1) / 2)) {
+          GlobalState.currentRole = Role.FOLLOWER
+          GlobalState.votedFor = null
+        }
+        GlobalState.heartbeatResponses.clear()
+        GlobalState.heartbeatResponses.add(SELFID)
+      }, LEASE_TIMEOUT)
       for (const [i, follower] of NODES.entries()) {
         if (follower != SELFID) {
           GlobalState.sentLength[i] = GlobalState.log.length
@@ -299,6 +320,23 @@ setInterval(() => {
 }, 50)
 
 setInterval(() => {
+  if (GlobalState.currentRole === Role.LEADER && !GlobalState.leaseTimeout) {
+    GlobalState.leaseTimeout = true
+    console.log('Acquiring Lease')
+    setTimeout(() => {
+      GlobalState.leaseTimeout = false
+      if (GlobalState.heartbeatResponses.size < Math.ceil((NODES.length + 1) / 2)) {
+        console.log('Failed to acquire lease. Stepping down.')
+        GlobalState.currentRole = Role.FOLLOWER
+        GlobalState.votedFor = null
+      }
+      GlobalState.heartbeatResponses.clear()
+      GlobalState.heartbeatResponses.add(SELFID)
+    }, LEASE_TIMEOUT)
+  }
+}, 50)
+
+setInterval(() => {
   if (GlobalState.currentRole === Role.LEADER) {
     for (const follower of NODES) {
       if (follower != SELFID) {
@@ -332,7 +370,7 @@ const requestVote = (
   const logOk = (candidate.lastLogTerm > lastTerm) || (candidate.lastLogTerm == lastTerm &&
      candidate.lastLogIndex >= GlobalState.log.length)
 
-  if (candidate.term == GlobalState.currentTerm && logOk && (GlobalState.votedFor == candidate.candidateId || GlobalState.votedFor == null)) {
+  if (candidate.term == GlobalState.currentTerm && logOk && (GlobalState.votedFor == candidate.candidateId || GlobalState.votedFor == null) && !GlobalState.leaseTimeout) {
     GlobalState.votedFor = candidate.candidateId
     const res: RequestVoteResponse = {
       term: GlobalState.currentTerm,
@@ -364,6 +402,10 @@ const logRequest = (
     GlobalState.currentRole = Role.FOLLOWER
     GlobalState.currentLeader = leader.leaderId
     cancelElectionTimer()
+    GlobalState.leaseTimeout = true
+    setTimeout(() => {
+      GlobalState.leaseTimeout = false
+    }, LEASE_TIMEOUT)
   }
 
   const logOk = (GlobalState.log.length >= leader.prevLogIndex) && (leader.prevLogIndex == 0 || GlobalState.log[leader.prevLogIndex - 1].term == leader.prevLogTerm)
