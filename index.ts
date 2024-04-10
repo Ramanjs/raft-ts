@@ -244,7 +244,7 @@ const receiveVote = (voterId: NodeId, term: number, granted: boolean) => {
       dumpLogs()
       // start a timeout that checks for number of heartbeatResponses received in the lease interval and steps down if it is less than majority or restarts the timeout if ok
       GlobalState.leaseTimeout = true
-      console.log('Acquiring Lease')
+      console.log(`Leader ${SELFID}: Acquiring Lease`)
       setTimeout(() => {
         GlobalState.leaseTimeout = false
         if (GlobalState.heartbeatResponses.size < Math.ceil((NODES.length + 1) / 2)) {
@@ -322,22 +322,25 @@ setInterval(() => {
 setInterval(() => {
   if (GlobalState.currentRole === Role.LEADER && !GlobalState.leaseTimeout) {
     GlobalState.leaseTimeout = true
-    console.log('Acquiring Lease')
+    console.log(`Leader ${SELFID}: Renewing Lease`)
     setTimeout(() => {
       GlobalState.leaseTimeout = false
       if (GlobalState.heartbeatResponses.size < Math.ceil((NODES.length + 1) / 2)) {
-        console.log('Failed to acquire lease. Stepping down.')
+        console.log(`Leader ${SELFID} lease renewal failed. Stepping Down`)
         GlobalState.currentRole = Role.FOLLOWER
         GlobalState.votedFor = null
       }
       GlobalState.heartbeatResponses.clear()
       GlobalState.heartbeatResponses.add(SELFID)
     }, LEASE_TIMEOUT)
+  } else if (GlobalState.currentRole === Role.LEADER && GlobalState.leaseTimeout) {
+    console.log('New Leader waiting for Old Leader Lease to timeout.')
   }
 }, 50)
 
 setInterval(() => {
   if (GlobalState.currentRole === Role.LEADER) {
+    console.log(`Leader ${SELFID}: sending heartbeat`)
     for (const follower of NODES) {
       if (follower != SELFID) {
         replicateLog(SELFID, follower)
@@ -411,6 +414,7 @@ const logRequest = (
   const logOk = (GlobalState.log.length >= leader.prevLogIndex) && (leader.prevLogIndex == 0 || GlobalState.log[leader.prevLogIndex - 1].term == leader.prevLogTerm)
 
   if (leader.term == GlobalState.currentTerm && logOk) {
+    console.log(`Node ${SELFID} accepted AppendEntries RPC.`)
     appendEntries(leader.prevLogIndex, leader.leaderCommit, leader.entries)
     const ack = leader.prevLogIndex + leader.entries.length
     const res: AppendEntriesResponse = {
@@ -420,6 +424,7 @@ const logRequest = (
     }
     callback(null, res)
   } else {
+    console.log(`Node ${SELFID} rejected AppendEntries RPC.`)
     const res: AppendEntriesResponse = {
       term: GlobalState.currentTerm,
       ack: 0,
